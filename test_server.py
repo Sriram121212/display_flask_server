@@ -6,7 +6,7 @@ import pandas as pd
 import os
 import logging
 import requests
-from datetime import datetime, time,timezone
+from datetime import datetime, time,timezone,timedelta
 import csv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -95,7 +95,8 @@ def training():
                     company_id VARCHAR(100) NOT NULL, 
                     employee_name VARCHAR(255) NOT NULL,
                     features TEXT NOT NULL,
-                    image TEXT NOT NULL   
+                    image TEXT NOT NULL ,
+                    del_i TINYINT DEFAULT 0
                 )
             """)
             connection.commit()
@@ -121,9 +122,15 @@ def training():
             
             
     """delete"""  
-    def delete_faces(company_id, employee_name):
+    def delete_faces(company_id, en_name):
+        print("inside of delete")
+        print(company_id)
+        print(en_name)
+        
         try:
-            folder_path = os.path.join("..", "test", "data", "data_faces_from_camera", company_id, employee_name)
+            folder_path  = f"data/data_faces_from_camera/{company_id}/{en_name}"
+
+            # folder_path = os.path.join("..","data", "data_faces_from_camera", company_id, en_name)
             print("Folder to delete:", folder_path)  # Debugging
             
             # Check if folder exists
@@ -205,7 +212,7 @@ def training():
 
         insert_features(connection, en_name, features_mean_personX, company_id)
         
-        delete_faces(company_id, employee_name)
+        delete_faces(company_id,en_name)
         
 
         if connection.is_connected():
@@ -303,7 +310,7 @@ def get_face_database(company_id):
             features_str = row[1]  # Features as a comma-separated string
             images=row[2]
 
-            print("image",employee_name,"-",images)
+            # print("image",employee_name,"-",images)
 
             # Convert features string to a NumPy array
             features = np.array([float(x) for x in features_str.split(",")])
@@ -312,9 +319,9 @@ def get_face_database(company_id):
             face_name_known_list.append(employee_name)
             face_feature_known_list.append(features)
             face_images_list.append(images)
-        print("face_name_known_list",face_name_known_list)
-        print("face_feature_known_list",face_feature_known_list)
-        print("face_images_list",face_images_list)
+        # print("face_name_known_list",face_name_known_list)
+        # print("face_feature_known_list",face_feature_known_list)
+        # print("face_images_list",face_images_list)
 
         logging.info(f"Loaded {len(face_name_known_list)} faces from database")
         return True
@@ -370,17 +377,33 @@ def save_attendance_to_api(name_str,company_id, check_out=False):
         else:
             logging.error(f"Failed to record check-out for {name}: {response.text}")
 
-def is_check_in_time():
-    """Check if current time is within check-in hours (9:25 AM - 10:00 AM)."""
-    current_time = datetime.now().time()
-    return time(13, 52) <= current_time <= time(13,45)
 
-def is_check_out_time():
+
+def is_check_in_time(check_in):
+    """Check if current time is within check-in hours (9:25 AM - 10:00 AM)."""
+     # Convert API-provided check-in time (string) to a datetime object
+    check_in_time = datetime.strptime(check_in, "%H:%M").time()
+    # Define the check-in window (1 hour after check-in)
+    check_in_end = (datetime.strptime(check_in, "%H:%M") + timedelta(hours=1)).time()
+    # Get the current time
+    current_time = datetime.now().time()
+    # Check if current time is within the check-in window
+    return check_in_time <= current_time <= check_in_end
+
+
+def is_check_out_time(check_out):
     """Check if current time is after check-out time (6:30 PM)."""
-    return datetime.now().time() >= time(13,50)
+    print(check_out)
+    check_out_str = datetime.strptime(check_out, "%H:%M").time()
+    print(check_out_str)
+    return datetime.now().time() >= check_out_str
 
 @app.route("/recognize", methods=["POST"])
 def recognize_faces():
+    # check_in = ""
+    # check_out = ""
+
+
     data = request.get_json()
     if not data or "features" not in data:
         return jsonify({"error": "Invalid request"}), 400
@@ -398,41 +421,60 @@ def recognize_faces():
     for feature in face_features:   
         distances = [return_euclidean_distance(feature, known_feature) for known_feature in face_feature_known_list]
 
-        print("face_name_known_list",face_name_known_list)
+        # print("face_name_known_list",face_name_known_list)
 
-        print("distances",distances)
+        # print("distances",distances)
         
         if distances and min(distances) < 0.4:
             recognized_name = face_name_known_list[distances.index(min(distances))]
             recognize_emp_image= face_images_list[distances.index(min(distances))]
             # print("distances.index(min(distances))",distances.index(min(distances)))
-            print("face_images_list  inside of function ", recognize_emp_image)
+            # print("face_images_list  inside of function ", recognize_emp_image)
 
             # ind = recognized_name
-            print("recognized_name",recognized_name)
-            print("face_name_known_list",face_name_known_list)
-            print("distances",distances)
-            print("distances.index(min(distances))",distances.index(min(distances)))
+            # print("recognized_name",recognized_name)
+            # print("face_name_known_list",face_name_known_list)
+            # print("distances",distances)
+            # print("distances.index(min(distances))",distances.index(min(distances)))
 
             recognized_image=face_images_list[distances.index(min(distances))]
-            print("recognized_image", recognized_image)
+            # print("recognized_image", recognized_image)
         else:
             recognized_name = "Unknown"
             recognize_emp_image=""
 
         recognized_names.append(recognized_name)
         recognized_images.append(recognize_emp_image)
-
+        
+       
         # If recognized, save attendance (Check-in during allowed time, otherwise check-out)
         if recognized_name != "Unknown":
-            if is_check_in_time():
-		        
+            
+            url = f"https://quantumfacio.com/api/company/get-company-by-id/{company_id}"
+            response = requests.get(url)
+
+            # Print API response status and data
+            print(f"Response Status Code: {response.status_code}")
+            try:
+                response_data = response.json()  # Convert response to JSON
+                company_info = response_data.get("response", {})
+                check_in_time = company_info.get("c_vCheckInTime")
+                
+                check_out_time = company_info.get("c_vCheckOutTime")
+                check_in = check_in_time
+                check_out = check_out_time
+
+                print("Check-In Time:", check_in_time)
+                print("Check-Out Time:", check_out_time)
+            except requests.exceptions.JSONDecodeError:
+                print("Failed to decode JSON response:", response.text)
+            
+            if is_check_in_time(check_in): 
                 save_attendance_to_api(recognized_name,company_id, check_out=False)
-                print("inside of checkin")
-            elif is_check_out_time():
-		        
+                # print("inside of checkin")
+            elif is_check_out_time(check_out):
                 save_attendance_to_api(recognized_name,company_id, check_out=True)
-                print("inside of checkOut")
+                # print("inside of checkOut")
 
     res=jsonify({"names": recognized_names,"images":recognized_images})
 
