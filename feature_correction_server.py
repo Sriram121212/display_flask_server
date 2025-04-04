@@ -44,7 +44,7 @@ def sakthi():
 
 
 
-@app.route("/training", methods=["POST"])
+@app.route("/traning", methods=["POST"])
 def training():  
     # Configure logging
     logging.basicConfig(level=logging.INFO)
